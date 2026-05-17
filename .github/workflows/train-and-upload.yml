@@ -31,7 +31,7 @@ jobs:
       - name: Upload artifacts to Hugging Face Hub
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_REPO_ID: arthyuyang-ai/imdb-sentiment-nn
+          HF_REPO_ID: arthyuyang-2026/imdb-sentiment-nn
         run: |
           python - <<'PY'
           import os
