@@ -1,24 +1,23 @@
 import argparse
-import json
-import pickle
-from pathlib import Path
 
-import joblib
+import torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 
-MODEL_DIR = Path("model")
-MODEL_PATH = MODEL_DIR / "model.joblib"
-VECTORIZER_PATH = MODEL_DIR / "vectorizer.pkl"
-CONFIG_PATH = MODEL_DIR / "config.json"
+MODEL_NAME = "textattack/bert-base-uncased-imdb"
 
 
-def load_label_mapping() -> dict:
-    if not CONFIG_PATH.exists():
-        return {"0": "negative", "1": "positive"}
+def model_label_to_sentiment(label: str) -> str:
+    normalized = label.strip().lower()
+    positive_labels = {"1", "label_1", "positive", "pos"}
+    negative_labels = {"0", "label_0", "negative", "neg"}
 
-    with CONFIG_PATH.open("r", encoding="utf-8") as file:
-        config = json.load(file)
-    return config.get("label_mapping", {"0": "negative", "1": "positive"})
+    if normalized in positive_labels:
+        return "positive"
+    if normalized in negative_labels:
+        return "negative"
+
+    return label
 
 
 def main() -> None:
@@ -26,21 +25,26 @@ def main() -> None:
     parser.add_argument("review", nargs="+", help="Review text to classify.")
     args = parser.parse_args()
 
-    if not MODEL_PATH.exists() or not VECTORIZER_PATH.exists():
-        raise FileNotFoundError("Model artifacts not found. Run `python train.py` first.")
-
     review_text = " ".join(args.review)
 
-    model = joblib.load(MODEL_PATH)
-    with VECTORIZER_PATH.open("rb") as file:
-        vectorizer = pickle.load(file)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
+    model.to("cpu")
+    model.eval()
 
-    label_mapping = load_label_mapping()
-    features = vectorizer.transform([review_text])
-    prediction = model.predict(features)[0]
-    sentiment = label_mapping.get(str(prediction), str(prediction))
+    inputs = tokenizer(
+        [review_text],
+        padding=True,
+        truncation=True,
+        max_length=512,
+        return_tensors="pt",
+    )
 
-    print(sentiment)
+    with torch.no_grad():
+        outputs = model(**inputs)
+        predicted_id = int(outputs.logits.argmax(dim=-1).item())
+
+    print(model_label_to_sentiment(model.config.id2label[predicted_id]))
 
 
 if __name__ == "__main__":

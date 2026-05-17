@@ -1,18 +1,18 @@
 import json
-import pickle
 from pathlib import Path
 
-import joblib
 import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
+import torch
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
-from sklearn.model_selection import train_test_split
-from sklearn.neural_network import MLPClassifier
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 
 DATA_PATH = Path("data/imdb_balanced_10k.csv")
+METRICS_PATH = Path("metrics.json")
 MODEL_DIR = Path("model")
-RANDOM_STATE = 42
+MODEL_NAME = "textattack/bert-base-uncased-imdb"
+EVALUATION_LIMIT = 50
+BATCH_SIZE = 8
 
 
 def detect_text_column(df: pd.DataFrame) -> str:
@@ -58,7 +58,7 @@ def detect_label_column(df: pd.DataFrame, text_column: str) -> str:
     return candidates[0][1]
 
 
-def normalize_binary_labels(series: pd.Series) -> tuple[pd.Series, dict]:
+def normalize_binary_labels(series: pd.Series) -> pd.Series:
     cleaned = series.astype(str).str.strip().str.lower()
     positive_values = {"1", "positive", "pos", "true", "yes", "good"}
     negative_values = {"0", "negative", "neg", "false", "no", "bad"}
@@ -66,14 +66,55 @@ def normalize_binary_labels(series: pd.Series) -> tuple[pd.Series, dict]:
     unique_values = sorted(cleaned.dropna().unique().tolist())
     if set(unique_values).issubset(positive_values | negative_values):
         mapped = cleaned.map(lambda value: 1 if value in positive_values else 0)
-        return mapped.astype(int), {"0": "negative", "1": "positive"}
+        return mapped.astype(int)
 
     if len(unique_values) != 2:
         raise ValueError(f"Expected binary labels, found {len(unique_values)} unique values.")
 
     label_to_int = {unique_values[0]: 0, unique_values[1]: 1}
-    int_to_label = {str(value): label for label, value in label_to_int.items()}
-    return cleaned.map(label_to_int).astype(int), int_to_label
+    return cleaned.map(label_to_int).astype(int)
+
+
+def model_label_to_int(label: str) -> int:
+    normalized = label.strip().lower()
+    positive_labels = {"1", "label_1", "positive", "pos"}
+    negative_labels = {"0", "label_0", "negative", "neg"}
+
+    if normalized in positive_labels:
+        return 1
+    if normalized in negative_labels:
+        return 0
+
+    raise ValueError(f"Unsupported model label: {label}")
+
+
+def predict_sentiments(texts: list[str]) -> list[int]:
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
+    model.to("cpu")
+    model.eval()
+
+    id_to_label = model.config.id2label
+    predictions = []
+
+    with torch.no_grad():
+        for start in range(0, len(texts), BATCH_SIZE):
+            batch = texts[start : start + BATCH_SIZE]
+            inputs = tokenizer(
+                batch,
+                padding=True,
+                truncation=True,
+                max_length=512,
+                return_tensors="pt",
+            )
+            outputs = model(**inputs)
+            predicted_ids = outputs.logits.argmax(dim=-1).tolist()
+            predictions.extend(
+                model_label_to_int(id_to_label[predicted_id])
+                for predicted_id in predicted_ids
+            )
+
+    return predictions
 
 
 def main() -> None:
@@ -86,90 +127,48 @@ def main() -> None:
 
     df = df[[text_column, label_column]].dropna()
     df[text_column] = df[text_column].astype(str).str.strip()
-    df = df[df[text_column] != ""]
+    df = df[df[text_column] != ""].head(EVALUATION_LIMIT)
 
-    labels, label_mapping = normalize_binary_labels(df[label_column])
-    texts = df[text_column]
+    if df.empty:
+        raise ValueError("No reviews available for evaluation.")
 
-    x_train, x_test, y_train, y_test = train_test_split(
-        texts,
-        labels,
-        test_size=0.2,
-        random_state=RANDOM_STATE,
-        stratify=labels,
-    )
+    labels = normalize_binary_labels(df[label_column])
+    texts = df[text_column].tolist()
+    predictions = predict_sentiments(texts)
 
-    vectorizer = TfidfVectorizer(
-        lowercase=True,
-        stop_words="english",
-        max_features=20_000,
-        min_df=2,
-        ngram_range=(1, 2),
-    )
-    x_train_tfidf = vectorizer.fit_transform(x_train)
-    x_test_tfidf = vectorizer.transform(x_test)
-
-    model = MLPClassifier(
-        hidden_layer_sizes=(64,),
-        activation="relu",
-        solver="adam",
-        alpha=1e-4,
-        batch_size=128,
-        learning_rate_init=1e-3,
-        max_iter=30,
-        early_stopping=True,
-        n_iter_no_change=5,
-        random_state=RANDOM_STATE,
-        verbose=False,
-    )
-    model.fit(x_train_tfidf, y_train)
-
-    predictions = model.predict(x_test_tfidf)
     metrics = {
-        "accuracy": accuracy_score(y_test, predictions),
-        "precision": precision_score(y_test, predictions, zero_division=0),
-        "recall": recall_score(y_test, predictions, zero_division=0),
-        "f1": f1_score(y_test, predictions, zero_division=0),
+        "model_name": MODEL_NAME,
+        "evaluated_samples": int(len(df)),
+        "accuracy": float(accuracy_score(labels, predictions)),
+        "precision": float(precision_score(labels, predictions, zero_division=0)),
+        "recall": float(recall_score(labels, predictions, zero_division=0)),
+        "f1": float(f1_score(labels, predictions, zero_division=0)),
     }
 
     config = {
         "dataset": str(DATA_PATH),
         "text_column": text_column,
         "label_column": label_column,
-        "label_mapping": label_mapping,
-        "random_state": RANDOM_STATE,
-        "test_size": 0.2,
-        "vectorizer": {
-            "type": "TfidfVectorizer",
-            "max_features": 20_000,
-            "min_df": 2,
-            "ngram_range": [1, 2],
-            "stop_words": "english",
-        },
-        "model": {
-            "type": "MLPClassifier",
-            "hidden_layer_sizes": [64],
-            "max_iter": 30,
-            "early_stopping": True,
-        },
-        "train_rows": int(len(x_train)),
-        "test_rows": int(len(x_test)),
+        "model_name": MODEL_NAME,
+        "evaluated_samples": int(len(df)),
+        "evaluation_limit": EVALUATION_LIMIT,
+        "device": "cpu",
     }
 
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    joblib.dump(model, MODEL_DIR / "model.joblib")
-    with (MODEL_DIR / "vectorizer.pkl").open("wb") as file:
-        pickle.dump(vectorizer, file)
-    with (MODEL_DIR / "config.json").open("w", encoding="utf-8") as file:
-        json.dump(config, file, indent=2)
+    with METRICS_PATH.open("w", encoding="utf-8") as file:
+        json.dump(metrics, file, indent=2)
     with (MODEL_DIR / "metrics.json").open("w", encoding="utf-8") as file:
         json.dump(metrics, file, indent=2)
+    with (MODEL_DIR / "config.json").open("w", encoding="utf-8") as file:
+        json.dump(config, file, indent=2)
 
-    print("Training complete")
-    print(f"Text column: {text_column}")
-    print(f"Label column: {label_column}")
-    for name, value in metrics.items():
-        print(f"{name}: {value:.4f}")
+    print(f"model name: {metrics['model_name']}")
+    print(f"number of evaluated samples: {metrics['evaluated_samples']}")
+    print(f"accuracy: {metrics['accuracy']:.4f}")
+    print(f"precision: {metrics['precision']:.4f}")
+    print(f"recall: {metrics['recall']:.4f}")
+    print(f"f1: {metrics['f1']:.4f}")
 
 
 if __name__ == "__main__":

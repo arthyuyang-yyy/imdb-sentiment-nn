@@ -2,12 +2,9 @@
 
 Lightweight IMDB sentiment analysis project for an ML CI/CD assignment.
 
-This project trains a feedforward neural network using only scikit-learn:
-
-- TF-IDF text features with `TfidfVectorizer`
-- Neural network classifier with `MLPClassifier`
-- CPU-only training
-- GitHub Actions workflow for training and uploading artifacts to Hugging Face Hub
+This project evaluates the HuggingFace pretrained sentiment model
+`textattack/bert-base-uncased-imdb` on the first 50 reviews from
+`data/imdb_balanced_10k.csv`.
 
 ## Project Structure
 
@@ -32,24 +29,49 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Train
+No GPU is required. The scripts force CPU inference.
+
+## Evaluate
 
 ```bash
 python train.py
 ```
 
-Training reads `data/imdb_balanced_10k.csv`, detects the text and label columns, trains the TF-IDF vectorizer and MLP model, evaluates the model, and writes artifacts to `model/`.
+The evaluator reads `data/imdb_balanced_10k.csv`, automatically detects the text
+and label columns when possible, evaluates only the first 50 non-empty reviews,
+and writes metrics to `metrics.json` and `model/metrics.json`.
+
+Console output format:
+
+```text
+model name: textattack/bert-base-uncased-imdb
+number of evaluated samples: 50
+accuracy: 0.0000
+precision: 0.0000
+recall: 0.0000
+f1: 0.0000
+```
+
+`metrics.json` format:
+
+```json
+{
+  "model_name": "textattack/bert-base-uncased-imdb",
+  "evaluated_samples": 50,
+  "accuracy": 0.0,
+  "precision": 0.0,
+  "recall": 0.0,
+  "f1": 0.0
+}
+```
 
 Generated artifacts:
 
-- `model/model.joblib`
-- `model/vectorizer.pkl`
+- `metrics.json`
 - `model/config.json`
 - `model/metrics.json`
 
 ## Predict
-
-After training:
 
 ```bash
 python predict.py "This movie was excellent and very moving."
@@ -73,10 +95,12 @@ The workflow:
 
 1. Installs Python dependencies.
 2. Runs `python train.py`.
-3. Creates the Hugging Face Hub repo if needed.
-4. Uploads the generated model artifacts.
+3. Uploads generated metrics artifacts to Hugging Face Hub when `HF_TOKEN` is configured.
 
-Set this GitHub repository secret before running the upload step:
+If `HF_TOKEN` is not configured, the upload step prints a skip message and exits
+successfully so GitHub Actions does not fail.
+
+Optional GitHub repository secret for uploads:
 
 ```text
 HF_TOKEN
@@ -87,10 +111,3 @@ Hugging Face repo:
 ```text
 arthyuyang-ai/imdb-sentiment-nn
 ```
-
-## Notes
-
-- PyTorch is not used.
-- TensorFlow is not used.
-- No GPU is required.
-- The model is intentionally small so it can run reliably in GitHub Actions.

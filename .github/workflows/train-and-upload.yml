@@ -37,9 +37,13 @@ jobs:
           import os
           from pathlib import Path
 
+          token = os.environ.get("HF_TOKEN")
+          if not token:
+              print("HF_TOKEN is not configured; skipping Hugging Face Hub upload.")
+              raise SystemExit(0)
+
           from huggingface_hub import HfApi, upload_file
 
-          token = os.environ["HF_TOKEN"]
           repo_id = os.environ["HF_REPO_ID"]
           api = HfApi(token=token)
 
@@ -51,16 +55,19 @@ jobs:
           )
 
           artifact_paths = [
-              Path("model/model.joblib"),
-              Path("model/vectorizer.pkl"),
+              Path("metrics.json"),
               Path("model/config.json"),
               Path("model/metrics.json"),
           ]
 
           for path in artifact_paths:
+              if not path.exists():
+                  print(f"Skipping missing artifact: {path}")
+                  continue
+
               upload_file(
                   path_or_fileobj=str(path),
-                  path_in_repo=path.name,
+                  path_in_repo=str(path),
                   repo_id=repo_id,
                   repo_type="model",
                   token=token,
