@@ -109,5 +109,5 @@ HF_TOKEN
 Hugging Face repo:
 
 ```text
-arthyuyang-ai/imdb-sentiment-nn
+arthyuyang-2026/imdb-sentiment-nn
 ```
