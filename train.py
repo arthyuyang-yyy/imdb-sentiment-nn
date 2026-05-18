@@ -11,7 +11,6 @@ DATA_PATH = Path("data/imdb_balanced_10k.csv")
 METRICS_PATH = Path("metrics.json")
 MODEL_DIR = Path("model")
 MODEL_NAME = "textattack/bert-base-uncased-imdb"
-EVALUATION_LIMIT = 50
 BATCH_SIZE = 8
 
 
@@ -122,12 +121,12 @@ def main() -> None:
         raise FileNotFoundError(f"Dataset not found: {DATA_PATH}")
 
     df = pd.read_csv(DATA_PATH)
-    text_column = detect_text_column(df)
-    label_column = detect_label_column(df, text_column)
+    text_column = "text"
+    label_column = "label"
 
     df = df[[text_column, label_column]].dropna()
     df[text_column] = df[text_column].astype(str).str.strip()
-    df = df[df[text_column] != ""].head(EVALUATION_LIMIT)
+    df = df[df[text_column] != ""]
 
     if df.empty:
         raise ValueError("No reviews available for evaluation.")
@@ -151,7 +150,6 @@ def main() -> None:
         "label_column": label_column,
         "model_name": MODEL_NAME,
         "evaluated_samples": int(len(df)),
-        "evaluation_limit": EVALUATION_LIMIT,
         "device": "cpu",
     }
 
